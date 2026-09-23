@@ -16,7 +16,20 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+
+  // The app runs through the pooler: serverless functions open a connection per
+  // invocation, and without pooling they exhaust the connection limit.
+  url = env("DATABASE_URL")
+
+  // Migrations do not. Prisma takes a session-level advisory lock before
+  // migrating, and a transaction-mode pooler discards session state between
+  // statements, so that lock can never be acquired — the build fails with
+  // P1002 every time, whatever the timeout.
+  //
+  // This is required once declared — Prisma will not fall back to DATABASE_URL.
+  // If your provider has no separate direct connection, set DIRECT_URL to the
+  // same value as DATABASE_URL.
+  directUrl = env("DIRECT_URL")
 }
 
 // ---------------------------------------------------------------- content ---

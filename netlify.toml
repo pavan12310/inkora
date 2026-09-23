@@ -1,0 +1,18 @@
+# Netlify picks up Next.js automatically via the OpenNext adapter, so this file
+# only sets the things it cannot infer.
+
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  # Next.js 15 and Prisma both want a current Node.
+  # Node 20 means Prisma needs the rhel-openssl-3.0.x engine, which is
+  # declared in prisma/schema.prisma rather than here.
+  NODE_VERSION = "20"
+
+# Uploaded covers are served from our own route and are immutable by key.
+[[headers]]
+  for = "/api/media/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

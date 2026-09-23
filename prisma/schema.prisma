@@ -1,0 +1,292 @@
+// Inkora V1 schema.
+//
+// Enum-like columns (kind, status, difficulty, role, targetType) are stored as
+// String with a TypeScript union in src/lib/types.ts rather than as a Prisma
+// enum. This keeps the schema portable across Postgres and SQLite, which makes
+// local work and CI builds possible without a Postgres instance.
+
+generator client {
+  provider = "prisma-client-js"
+
+  // "native" covers local development. "rhel-openssl-3.0.x" is the engine the
+  // serverless runtimes on Netlify and AWS Lambda need at Node 20 — without it
+  // the build succeeds and every database call fails once deployed.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------- content ---
+
+model Post {
+  id     String @id @default(cuid())
+  slug   String @unique
+  kind   String @default("ARTICLE") // ARTICLE | TUTORIAL | RESEARCH
+  status String @default("DRAFT") // DRAFT | PENDING | PUBLISHED | REJECTED
+
+  title      String
+  subtitle   String @default("")
+  coverImage String @default("")
+  body       String @default("")
+
+  // GEO / AEO block. Surfaced on the page and in JSON-LD so both crawlers and
+  // language models can extract the piece without parsing prose.
+  keyTakeaways String @default("") // one per line
+  faq          String @default("") // "Q\nA\n---\nQ\nA"
+  sources      String @default("") // one per line
+
+  // Tutorial-only
+  difficulty   String @default("") // BEGINNER | INTERMEDIATE | ADVANCED
+  timeRequired String @default("")
+  tools        String @default("") // comma separated
+
+  // Research-only
+  abstract    String @default("")
+  methodology String @default("")
+
+  // SEO overrides. Blank means "derive from the content".
+  seoTitle        String @default("")
+  metaDescription String @default("")
+
+  authorId      String
+  author        User         @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  publicationId String?
+  publication   Publication? @relation(fields: [publicationId], references: [id], onDelete: SetNull)
+
+  topics    PostTopic[]
+  likes     Like[]
+  bookmarks Bookmark[]
+  comments  Comment[]
+
+  views        Int       @default(0)
+  reviewNote   String    @default("")
+  reviewedById String?
+  reviewedBy   User?     @relation("Reviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  submittedAt  DateTime?
+  reviewedAt   DateTime?
+  publishedAt  DateTime?
+
+  @@index([status, publishedAt])
+  @@index([kind, status])
+  @@index([authorId, status])
+  @@index([publicationId, status])
+  days        PostDay[]
+}
+
+model Topic {
+  id          String      @id @default(cuid())
+  slug        String      @unique
+  name        String
+  description String      @default("")
+  posts       PostTopic[]
+  follows     Follow[]
+}
+
+model PostTopic {
+  postId  String
+  topicId String
+  post    Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  topic   Topic  @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  @@id([postId, topicId])
+  @@index([topicId])
+}
+
+model Publication {
+  id          String              @id @default(cuid())
+  slug        String              @unique
+  name        String
+  description String              @default("")
+  about       String              @default("")
+  guidelines  String              @default("")
+  logo        String              @default("")
+  coverImage  String              @default("")
+  ownerId     String
+  owner       User                @relation("PublicationOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  members     PublicationMember[]
+  posts       Post[]
+  follows     Follow[]
+  createdAt   DateTime            @default(now())
+}
+
+model PublicationMember {
+  publicationId String
+  userId        String
+  role          String      @default("WRITER") // EDITOR | WRITER
+  publication   Publication @relation(fields: [publicationId], references: [id], onDelete: Cascade)
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([publicationId, userId])
+}
+
+// ------------------------------------------------------------------ social ---
+
+model Follow {
+  id            String       @id @default(cuid())
+  followerId    String
+  follower      User         @relation("Follower", fields: [followerId], references: [id], onDelete: Cascade)
+  userId        String?
+  user          User?        @relation("Followed", fields: [userId], references: [id], onDelete: Cascade)
+  topicId       String?
+  topic         Topic?       @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  publicationId String?
+  publication   Publication? @relation(fields: [publicationId], references: [id], onDelete: Cascade)
+  createdAt     DateTime     @default(now())
+
+  @@unique([followerId, userId])
+  @@unique([followerId, topicId])
+  @@unique([followerId, publicationId])
+  @@index([userId])
+}
+
+model Like {
+  userId    String
+  postId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([userId, postId])
+  @@index([postId])
+}
+
+model Bookmark {
+  userId    String
+  postId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([userId, postId])
+  @@index([postId])
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  postId    String
+  userId    String
+  body      String
+  hidden    Boolean  @default(false)
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@index([postId, createdAt])
+}
+
+// ------------------------------------------------------------------- users ---
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+
+  handle    String @unique @default(cuid())
+  bio       String @default("")
+  website   String @default("")
+  location  String @default("")
+  expertise String @default("") // comma separated
+  twitter   String @default("")
+  linkedin  String @default("")
+
+  posts        Post[]
+  reviewed     Post[]              @relation("Reviewer")
+  publications Publication[]       @relation("PublicationOwner")
+  memberships  PublicationMember[]
+  following    Follow[]            @relation("Follower")
+  followers    Follow[]            @relation("Followed")
+  likes        Like[]
+  bookmarks    Bookmark[]
+  comments     Comment[]
+
+  accounts  Account[]
+  sessions  Session[]
+  createdAt DateTime  @default(now())
+  notifications Notification[] @relation("Notified")
+  actedOn       Notification[] @relation("Actor")
+}
+
+model Setting {
+  key   String @id
+  value String
+}
+
+model Account {
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([provider, providerAccountId])
+}
+
+model Session {
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@id([identifier, token])
+}
+
+
+/// One row per piece per day, so views can be charted over time.
+///
+/// Post.views stays as the lifetime counter — it is read on every card and a
+/// SUM across this table on each render would be wasteful. The day is stored as
+/// a YYYY-MM-DD string in UTC: it sorts correctly as text, avoids a timezone
+/// class differing between Postgres and SQLite, and makes the unique constraint
+/// trivial.
+model PostDay {
+  id     String @id @default(cuid())
+  postId String
+  post   Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  day    String
+  views  Int    @default(0)
+
+  @@unique([postId, day])
+  @@index([day])
+}
+
+
+/// In-app notifications.
+///
+/// Email alone is not enough: writers turn it off, it lands in spam, and a
+/// reader who commented has no way to see a reply without it. Kinds are a
+/// plain string rather than an enum so a new one does not need a migration.
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation("Notified", fields: [userId], references: [id], onDelete: Cascade)
+  kind      String
+  body      String
+  href      String   @default("")
+  actorId   String?
+  actor     User?    @relation("Actor", fields: [actorId], references: [id], onDelete: SetNull)
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
+}
